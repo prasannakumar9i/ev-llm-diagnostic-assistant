@@ -10,6 +10,16 @@ st.set_page_config(page_title="EV AI Diagnostic Assistant")
 st.title("⚡ EV AI Diagnostic Assistant")
 st.write("Ask questions about EV repair issues from the manual.")
 
+import requests
+
+url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+pdf_path = "manual.pdf"
+
+r = requests.get(url)
+
+with open(pdf_path, "wb") as f:
+    f.write(r.content)
+
 # ---- Load PDF ----
 pdf_path = "manual.pdf"
 
