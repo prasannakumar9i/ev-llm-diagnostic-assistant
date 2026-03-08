@@ -1,21 +1,18 @@
 import streamlit as st
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+import requests
+import faiss
+import numpy as np
+from sentence_transformers import SentenceTransformer
 from transformers import pipeline
-
-st.set_page_config(page_title="EV AI Diagnostic Assistant")
+from pypdf import PdfReader
 
 st.title("⚡ EV AI Diagnostic Assistant")
-st.write("Ask questions about EV repair issues from the manual.")
 
-# ---- Load PDF ----
-pdf_path = "manual.pdf"
+st.write("Ask questions about EV repair issues")
 
-import requests
-
+# Download small test PDF
 url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+
 pdf_path = "manual.pdf"
 
 r = requests.get(url)
@@ -23,71 +20,64 @@ r = requests.get(url)
 with open(pdf_path, "wb") as f:
     f.write(r.content)
 
+# Read PDF
+reader = PdfReader(pdf_path)
 
-loader = PyPDFLoader(pdf_path)
-docs = loader.load()
+text = ""
 
-# ---- Split text ----
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,
-    chunk_overlap=200
-)
+for page in reader.pages:
+    text += page.extract_text()
 
-chunks = text_splitter.split_documents(docs)
+# Simple chunking
+chunk_size = 500
+chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
 
-# ---- Embeddings ----
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+# Embedding model
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# ---- Vector DB ----
-vectorstore = FAISS.from_documents(chunks, embeddings)
+embeddings = model.encode(chunks)
 
-# ---- LLM ----
+# Create FAISS index
+dimension = embeddings.shape[1]
+
+index = faiss.IndexFlatL2(dimension)
+
+index.add(np.array(embeddings))
+
+# LLM
 llm = pipeline(
     "text2text-generation",
     model="google/flan-t5-base",
     max_length=256
 )
 
-def generate_answer(context, question):
+query = st.text_input("Ask your EV question")
+
+if query:
+
+    query_embedding = model.encode([query])
+
+    distances, indices = index.search(np.array(query_embedding), k=3)
+
+    context = ""
+
+    for i in indices[0]:
+        context += chunks[i] + "\n"
 
     prompt = f"""
 You are an EV diagnostic assistant.
-
-Use the EV repair manual below to answer the question.
 
 Manual:
 {context}
 
 Question:
-{question}
+{query}
 
-Provide a clear diagnostic explanation.
+Provide a clear diagnostic answer.
 """
 
-    result = llm(prompt)
-
-    return result[0]["generated_text"]
-
-
-# ---- User input ----
-query = st.text_input("Ask your EV question")
-
-if query:
-
-    documents = vectorstore.similarity_search(query, k=3)
-
-    context = " ".join([doc.page_content for doc in documents])
-
-    sources = [doc.metadata.get("page", "Unknown") for doc in documents]
-
-    answer = generate_answer(context, query)
+    answer = llm(prompt)[0]["generated_text"]
 
     st.subheader("Answer")
+
     st.write(answer)
-
-    st.subheader("Sources")
-
-    for s in sources:
-        st.write(f"Page: {s}")
